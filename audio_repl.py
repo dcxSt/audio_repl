@@ -2,10 +2,11 @@ import sounddevice as sd
 from scipy.io.wavfile import write
 import numpy as np
 from datetime import datetime
-from time import time
 import json
 import struct
 import socket
+import threading
+import time
 
 # kernel parameters
 HOST = '127.0.0.1' # data.acquisition.host
@@ -46,7 +47,7 @@ def start():
     stream, filename = start_audio_recording()
     data_to_send = {
       "id": id,
-      "timestamp": int(time() * 1e6),
+      "timestamp": int(time.time() * 1e6),
       "event": "start_experiment",
       "value": "start_audio"
     }
@@ -62,7 +63,7 @@ def stop(stream, filename):
     global id
     data_to_send = {
       "id": id,
-      "timestamp": int(time() * 1e6),
+      "timestamp": int(time.time() * 1e6),
       "event": "end_experiment",
       "value": "stop_audio"
     }
@@ -75,6 +76,19 @@ def stop(stream, filename):
     stop_audio_recording(stream, filename)
     print("done")
 
+def issue_periodic_restart(interval, stream, filename):
+    """interval in seconds"""
+    print()
+    print("Called issue_periodic_restart")
+    stop(stream, filename)
+    time.sleep(0.4) # give kernel ample time not to conflate tcp signals
+    stream, filename = start() # new stream and filename
+    print(">>> ")
+    global timer
+    timer = threading.Timer(interval, issue_periodic_restart, [interval, stream, filename])
+    timer.start()
+    return stream, filename
+
 ## Create the stream object
 #stream = sd.InputStream(samplerate=FS, channels=channels, callback=callback)
 #stream.start()  # Start the stream explicitly
@@ -85,6 +99,9 @@ def stop(stream, filename):
 def repl():
     print("Audio Recorder REPL")
     print("Type 'start' to begin recording and 'stop' to end and save.")
+    global timer
+    interval = 5 # 10 minutes = 600 seconds
+    timer = None
     stream = None
     filename = None
     while True:
@@ -93,19 +110,28 @@ def repl():
             if stream is not None:
                 print("Recording already in progress.")
             else:
+                recorded_frames = [] # reset recorded frames, redundant, bad code, just in case
                 stream, filename = start()
+                timer = threading.Timer(interval, issue_periodic_restart, [interval, stream, filename])
+                timer.start()
         elif command == "stop":
             if stream is None:
                 print("No recording in progress.")
             else:
                 stop(stream, filename)
                 stream = None
+                timer.cancel() 
                 print("Enter 'start' to start anew, 'exit' to quit.")
+                recorded_frames = [] # reset recorded frames
         elif command == "exit":
             if stream is not None:
                 print("Stopping recording before exit...")
                 stop(stream, filename)
+                timer.cancel()
+                recorded_frames = [] # reset recorded frames
             break
+        else:
+            print("Unkown command, use 'start', 'stop', or 'exit'")
 
 if __name__ == "__main__":
     repl()
